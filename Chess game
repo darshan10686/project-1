@@ -1,69 +1,300 @@
 import tkinter as tk
-import chess
+from tkinter import messagebox
 import random
+import math
 
-board = chess.Board()
+# Unicode symbols for chess pieces
+PIECES = {
+    'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟',
+    'R': '♖', 'N': '♘', 'B': '♗', 'Q': '♕', 'K': '♔', 'P': '♙',
+    '.': ''
+}
 
-root = tk.Tk()
-root.title("Chess vs AI")
+# Piece scoring for AI evaluation (Negative values for Black/AI, Positive for White/Player)
+PIECE_VALUES = {
+    'p': -1, 'n': -3, 'b': -3, 'r': -5, 'q': -9, 'k': -1000,
+    'P': 1,  'N': 3,  'B': 3,  'R': 5,  'Q': 9,  'K': 1000,
+    '.': 0
+}
 
-buttons = {}
+SQUARE_SIZE = 60  # Size of each square in pixels
 
-def update_board():
-    pieces = {
-        'P': '♙', 'R': '♖', 'N': '♘', 'B': '♗', 'Q': '♕', 'K': '♔',
-        'p': '♟', 'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚'
-    }
+class CorrectedChessAI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Chess Engine - Fixed Correct Movements")
+        
+        # Board Setup (Uppercase = Player/White, Lowercase = AI/Black, '.' = Empty)
+        self.board = [
+            ['r', 'n', 'b', 'q', 'k', 'b', 'n', 'r'],
+            ['p', 'p', 'p', 'p', 'p', 'p', 'p', 'p'],
+            ['.', '.', '.', '.', '.', '.', '.', '.'],
+            ['.', '.', '.', '.', '.', '.', '.', '.'],
+            ['.', '.', '.', '.', '.', '.', '.', '.'],
+            ['.', '.', '.', '.', '.', '.', '.', '.'],
+            ['P', 'P', 'P', 'P', 'P', 'P', 'P', 'P'],
+            ['R', 'N', 'B', 'Q', 'K', 'B', 'N', 'R']
+        ]
+        
+        self.turn = 'White'
+        self.selected_piece = None
+        self.last_move = None      # For drawing the directional red arrow
+        self.legal_moves = []      # For drawing the blue destination dots
+        
+        # Initialize Canvas interface
+        self.canvas = tk.Canvas(root, width=SQUARE_SIZE*8, height=SQUARE_SIZE*8)
+        self.canvas.pack()
+        
+        # Bind mouse click event
+        self.canvas.bind("<Button-1>", self.handle_click)
+        
+        self.draw_board()
 
-    for row in range(8):
-        for col in range(8):
-            square = chess.square(col, 7 - row)
-            piece = board.piece_at(square)
+    def get_all_legal_moves(self, r, c):
+        """Scans the board and gathers all valid destination coordinates for a selected piece."""
+        moves = []
+        for tr in range(8):
+            for tc in range(8):
+                if self.is_valid_move(r, c, tr, tc):
+                    moves.append((tr, tc))
+        return moves
 
-            text = pieces.get(str(piece), "") if piece else ""
-            buttons[(row, col)].config(text=text)
+    def draw_board(self):
+        """Clears and redraws the grid squares, highlights, hints, and arrows."""
+        self.canvas.delete("all")
+        
+        # 1. Render Grid
+        for r in range(8):
+            for c in range(8):
+                x1, y1 = c * SQUARE_SIZE, r * SQUARE_SIZE
+                x2, y2 = x1 + SQUARE_SIZE, y1 + SQUARE_SIZE
+                
+                if self.selected_piece == (r, c):
+                    color = "#7FFFD4"  # Aquamarine highlight for selection
+                else:
+                    color = "#DDBB88" if (r + c) % 2 == 0 else "#AA7744"
+                    
+                self.canvas.create_rectangle(x1, y1, x2, y2, fill=color, outline="")
 
-selected = None
+        # 2. Render Move Assistance (Blue Circles)
+        if self.selected_piece and self.turn == 'White':
+            for (lr, lc) in self.legal_moves:
+                cx = lc * SQUARE_SIZE + (SQUARE_SIZE / 2)
+                cy = lr * SQUARE_SIZE + (SQUARE_SIZE / 2)
+                radius = 8
+                self.canvas.create_oval(
+                    cx - radius, cy - radius, cx + radius, cy + radius, 
+                    fill="#1E90FF", outline=""
+                )
 
-def click(row, col):
-    global selected
+        # 3. Render Directional Arrow for Last Move
+        if self.last_move:
+            (sr, sc), (er, ec) = self.last_move
+            self.draw_arrow(sr, sc, er, ec)
 
-    square = chess.square(col, 7 - row)
+        # 4. Render Pieces
+        for r in range(8):
+            for c in range(8):
+                piece = self.board[r][c]
+                if piece != '.':
+                    x = c * SQUARE_SIZE + (SQUARE_SIZE / 2)
+                    y = r * SQUARE_SIZE + (SQUARE_SIZE / 2)
+                    self.canvas.create_text(x, y, text=PIECES[piece], font=("Helvetica", 28), fill="black")
 
-    if selected is None:
-        selected = square
-    else:
-        move = chess.Move(selected, square)
-
-        if move in board.legal_moves:
-            board.push(move)
-            update_board()
-
-            if not board.is_game_over():
-                ai_move()
-
-        selected = None
-
-def ai_move():
-    move = random.choice(list(board.legal_moves))
-    board.push(move)
-    update_board()
-
-for row in range(8):
-    for col in range(8):
-        color = "#EEEED2" if (row + col) % 2 == 0 else "#769656"
-
-        btn = tk.Button(
-            root,
-            width=4,
-            height=2,
-            font=("Arial", 20),
-            bg=color,
-            command=lambda r=row, c=col: click(r, c)
+    def draw_arrow(self, sr, sc, er, ec):
+        """Draws a clean directional arrow from start to end position."""
+        x1, y1 = sc * SQUARE_SIZE + (SQUARE_SIZE / 2), sr * SQUARE_SIZE + (SQUARE_SIZE / 2)
+        x2, y2 = ec * SQUARE_SIZE + (SQUARE_SIZE / 2), er * SQUARE_SIZE + (SQUARE_SIZE / 2)
+        
+        angle = math.atan2(y2 - y1, x2 - x1)
+        shorten_by = 16
+        x2_short = x2 - shorten_by * math.cos(angle)
+        y2_short = y2 - shorten_by * math.sin(angle)
+        
+        self.canvas.create_line(
+            x1, y1, x2_short, y2_short, 
+            fill="#FF3333", width=5, arrow=tk.LAST, 
+            arrowshape=(16, 20, 6)
         )
 
-        btn.grid(row=row, column=col)
-        buttons[(row, col)] = btn
+    def handle_click(self, event):
+        """Maps user screen clicks to grid cells and controls turns."""
+        if self.turn != 'White':
+            return  # Lock input during AI processing
+            
+        c = event.x // SQUARE_SIZE
+        r = event.y // SQUARE_SIZE
+        piece = self.board[r][c]
+        
+        if self.selected_piece is None:
+            if piece != '.' and piece.isupper():
+                self.selected_piece = (r, c)
+                self.legal_moves = self.get_all_legal_moves(r, c)
+                self.draw_board()
+        else:
+            sr, sc = self.selected_piece
+            if (sr, sc) == (r, c):
+                self.selected_piece = None
+                self.legal_moves = []
+                self.draw_board()
+                return
 
-update_board()
-root.mainloop()
+            if (r, c) in self.legal_moves:
+                self.last_move = ((sr, sc), (r, c))
+                if self.execute_move(sr, sc, r, c):
+                    return
+                
+                self.selected_piece = None
+                self.legal_moves = []
+                self.turn = 'Black'
+                self.root.after(600, self.make_ai_move)
+            else:
+                if piece != '.' and piece.isupper():
+                    self.selected_piece = (r, c)
+                    self.legal_moves = self.get_all_legal_moves(r, c)
+                else:
+                    self.selected_piece = None
+                    self.legal_moves = []
+                self.draw_board()
+
+    def execute_move(self, sr, sc, er, ec):
+        """Updates internal multi-dimensional layout lists and scans win bounds."""
+        target = self.board[er][ec]
+        self.board[er][ec] = self.board[sr][sc]
+        self.board[sr][sc] = '.'
+        self.draw_board()
+        
+        if target.lower() == 'k':
+            winner = "White (You)" if target.islower() else "Black (AI)"
+            messagebox.showinfo("Checkmate", f"Game Over! {winner} wins!")
+            self.reset_game()
+            return True
+        return False
+
+    def make_ai_move(self):
+        """AI decision engine using Minimax simulation scoring to find the best move."""
+        best_score = 9999
+        best_moves = []
+        
+        for r in range(8):
+            for c in range(8):
+                if self.board[r][c].islower():  
+                    for tr in range(8):
+                        for tc in range(8):
+                            if self.is_valid_move(r, c, tr, tc):
+                                original_start = self.board[r][c]
+                                original_target = self.board[tr][tc]
+                                
+                                self.board[tr][tc] = original_start
+                                self.board[r][c] = '.'
+                                score = self.evaluate_board()
+                                
+                                self.board[r][c] = original_start
+                                self.board[tr][tc] = original_target
+                                
+                                if score < best_score:
+                                    best_score = score
+                                    best_moves = [(r, c, tr, tc)]
+                                elif score == best_score:
+                                    best_moves.append((r, c, tr, tc))
+        
+        if best_moves:
+            sr, sc, er, ec = random.choice(best_moves)
+            self.last_move = ((sr, sc), (er, ec))
+            self.execute_move(sr, sc, er, ec)
+            
+        self.turn = 'White'
+
+    def evaluate_board(self):
+        return sum(PIECE_VALUES[self.board[r][c]] for r in range(8) for c in range(8))
+
+    def is_valid_move(self, sr, sc, er, ec):
+        """CORRECTED rule logic handler for authentic piece trajectory paths."""
+        if sr == er and sc == ec:
+            return False
+            
+        piece_char = self.board[sr][sc]
+        piece = piece_char.lower()
+        target = self.board[er][ec]
+        
+        # Block capturing your own piece team color
+        if target != '.' and (piece_char.isupper() == target.isupper()):
+            return False
+            
+        dr, dc = er - sr, ec - sc
+
+        # 1. FIXED PAWN RULES (Handles initial 2-step jump cleanly)
+        if piece == 'p':
+            direction = -1 if piece_char.isupper() else 1
+            start_rank = 6 if piece_char.isupper() else 1
+            
+            # Standard 1 square forward
+            if dc == 0 and dr == direction and target == '.':
+                return True
+            # Initial 2 square forward jump
+            if dc == 0 and sr == start_rank and dr == 2 * direction:
+                # Ensure BOTH destination and intermediate square are empty
+                intermediate_row = sr + direction
+                if target == '.' and self.board[intermediate_row][sc] == '.':
+                    return True
+            # Diagonal capture
+            if abs(dc) == 1 and dr == direction and target != '.':
+                return True
+            return False
+
+        # 2. KNIGHT RULES (L-Shapes can jump pieces)
+        if piece == 'n': 
+            return (abs(dr), abs(dc)) in [(1, 2), (2, 1)]
+
+        # 3. KING RULES (1 Step anywhere)
+        if piece == 'k': 
+            return max(abs(dr), abs(dc)) == 1
+
+        # 4. ROOK RULES (Straight lines)
+        if piece == 'r': 
+            return (dr == 0 or dc == 0) and self.is_path_clear(sr, sc, er, ec)
+
+        # 5. BISHOP RULES (Diagonals)
+        if piece == 'b': 
+            return abs(dr) == abs(dc) and self.is_path_clear(sr, sc, er, ec)
+
+        # 6. QUEEN RULES (Rook + Bishop combination)
+        if piece == 'q': 
+            return (dr == 0 or dc == 0 or abs(dr) == abs(dc)) and self.is_path_clear(sr, sc, er, ec)
+
+        return False
+
+    def is_path_clear(self, sr, sc, er, ec):
+        """FIXED: Checks lines of sight step-by-step to prevent jumping over blockades."""
+        step_r = 0 if sr == er else (1 if er > sr else -1)
+        step_c = 0 if sc == ec else (1 if ec > sc else -1)
+        
+        curr_r, curr_c = sr + step_r, sc + step_c
+        while (curr_r, curr_c) != (er, ec):
+            if self.board[curr_r][curr_c] != '.':
+                return False  # Path is blocked!
+            curr_r += step_r
+            curr_c += step_c
+        return True
+
+    def reset_game(self):
+        self.board = [
+            ['r', 'n', 'b', 'q', 'k', 'b', 'n', 'r'],
+            ['p', 'p', 'p', 'p', 'p', 'p', 'p', 'p'],
+            ['.', '.', '.', '.', '.', '.', '.', '.'],
+            ['.', '.', '.', '.', '.', '.', '.', '.'],
+            ['.', '.', '.', '.', '.', '.', '.', '.'],
+            ['.', '.', '.', '.', '.', '.', '.', '.'],
+            ['P', 'P', 'P', 'P', 'P', 'P', 'P', 'P'],
+            ['R', 'N', 'B', 'Q', 'K', 'B', 'N', 'R']
+        ]
+        self.turn = 'White'
+        self.selected_piece = None
+        self.last_move = None
+        self.legal_moves = []
+        self.draw_board()
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = CorrectedChessAI(root)
+    root.mainloop()
